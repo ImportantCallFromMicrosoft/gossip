@@ -7,6 +7,13 @@
 
 namespace gossip {
     // shared between scatter, gather, all_to_all_async
+    template<typename value_t>
+    __global__
+    void copy_kernel(value_t* dst, value_t* src, size_t max_idx) {
+    size_t thid = blockIdx.x * blockDim.x + threadIdx.x;
+    if (thid < max_idx)
+        dst[thid] = src[thid];
+    }
 
     struct transfer {
         const gpu_id_t src_gpu;
@@ -213,6 +220,7 @@ namespace gossip {
 
                 if(t.event_before != nullptr) cudaStreamWaitEvent(stream, *(t.event_before), 0);
                 cudaMemcpyPeerAsync(to, trg, from, src, size, stream);
+                //copy_kernel<value_t><<<SDIV(t.len, 1024), 1024, 0, stream>>>(to, from, t.len);
                 if(t.event_after != nullptr) cudaEventRecord(*(t.event_after), stream);
             } CUERR
 

@@ -9,8 +9,7 @@ using json = nlohmann::json;
 
 using gpu_id_t = gossip::gpu_id_t;
 
-gossip::transfer_plan_t
-parse_plan(const char* filename) {
+gossip::transfer_plan_t parse_plan(const char* filename) {
     std::string type = "";
     gpu_id_t num_gpus = 0;
     gpu_id_t main_gpu = -1;
