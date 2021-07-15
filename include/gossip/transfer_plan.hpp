@@ -2,9 +2,9 @@
 
 #include <vector>
 #include <iostream>
-#include <common.cuh>
 
 #include "config.h"
+#include "common.cuh"
 #include "error_checking.hpp"
 
 namespace gossip {
@@ -13,17 +13,34 @@ namespace gossip {
         * which must lie on consecutive blocks of memory in the source and target buffers. The transfer_template can be used
         * to create a transfer given the chunk sizes and precalculated buffer offsets.
         */ 
-    struct transfer_template {
-        private: 
+    struct transfer_template {            
+        public:
             const std::vector<chunk_id_t> chunks; // chunk_ids start at 0 and go to num_chunks - 1; 
-            const unsigned short src_chunk_pos;
-            const unsigned short trg_chunk_pos;
+            const chunk_id_t src_chunk_pos;
+            const chunk_id_t trg_chunk_pos;
             const gpu_id_t src_gpu;
             const gpu_id_t trg_gpu;
-            std::vector<event_id_t> evt_ids_before; // event_ids start at 1; 0 stands for no event
-            event_id_t evt_id_after;
-            
-        public:
+            const std::vector<event_id_t> evt_ids_before; // event_ids start at 1; 0 stands for no event
+            const event_id_t evt_id_after;
+        
+            transfer_template(
+                const std::vector<chunk_id_t> chunks, // chunk_ids start at 0 and go to num_chunks - 1; 
+                const chunk_id_t src_chunk_pos,
+                const chunk_id_t trg_chunk_pos,
+                const gpu_id_t src_gpu,
+                const gpu_id_t trg_gpu,
+                const std::vector<event_id_t> evt_ids_before,
+                const event_id_t evt_id_after
+            ) : 
+                chunks(chunks),
+                src_chunk_pos(src_chunk_pos),
+                trg_chunk_pos(trg_chunk_pos),
+                src_gpu(src_gpu),
+                trg_gpu(trg_gpu),
+                evt_ids_before(evt_ids_before),
+                evt_id_after(evt_id_after)
+            {}
+
             /** Given the lengths of the chunks and precalculated buffer offsets returns the transfer corresponding to the packet.
             * @param chunk_lens vector of the lengths (in number of contained elements of the underlying datatype) of each chunk
             * @param src_buf_offsets buf_offsets[i][j] Gives the offset of the j-th chunk in the buffer of gpu i
@@ -37,14 +54,14 @@ namespace gossip {
                 const std::vector<size_t>& chunk_lens,
                 const size_t* src_buf_offsets,
                 const size_t* trg_buf_offsets,
-                const std::vector<cudaEvent_t*> events
+                std::vector<cudaEvent_t*>& events
             ) {
                 // Calculate number of elements to be transferred 
                 size_t len = 0;
-                for (chunk_pos_t i = 0; i < chunks.size(); i++)
+                for (chunk_id_t i = 0; i < chunks.size(); i++)
                     len += chunk_lens[chunks[i]];
                 // Calculate pointers to the referenced events
-                std::vector<cudaEvent_t*> evts_before();
+                cudaEvent_t* evts_before[evt_ids_before.size()];
                 for (event_id_t i : evt_ids_before)
                     evts_before[i] = events[i-1];
                 cudaEvent_t* evt_after;
@@ -56,10 +73,10 @@ namespace gossip {
                 // by the previous transfer's instantiations
                 cudaSetDevice(src_gpu);
                 cudaEventCreate(evt_after);
-                return transfer<size_t>(
+                return transfer(
                     src_gpu, src_buf_offsets[src_chunk_pos],
                     trg_gpu, trg_buf_offsets[src_chunk_pos],
-                    len, evts_before, evt_after
+                    len, evts_before, evt_ids_before.size(), evt_after
                 );
             }
     };
@@ -83,7 +100,7 @@ namespace gossip {
             const gpu_id_t num_gpus,
             const size_t num_chunks,
             const std::vector<std::vector<gpu_id_t>>& sequences,
-            const std::vector<std::vector<gpu_id_t>>& positions,
+            const std::vector<std::vector<chunk_id_t>>& positions,
             const std::vector<size_t>& transfer_sizes
         ) :
             type_(type),
@@ -107,7 +124,7 @@ namespace gossip {
                 bool src = true;
                 in_src[c].push_back(true);
                 for (size_t p = 1; p <= num_phases_; p++) {
-                    if (src && (sequences[c][p - 1] == sequences[c][p]) {
+                    if (src && (sequences[c][p - 1] == sequences[c][p])) {
                         in_src[c].push_back(true);
                     } else {
                         in_src[c].push_back(false);
@@ -115,16 +132,17 @@ namespace gossip {
                     }
                 }
             }
-            std::vector<std::vector<bool>> in_dst();
+
+            std::vector<std::vector<bool>> in_dst(0);
             for (chunk_id_t c = 0; c < num_chunks_; c++) {
                 in_dst.emplace_back(num_phases_, false);
                 in_dst[c][num_phases_] = true;
                 bool dst = true;
                 for (size_t p = num_phases_ - 1; p >= 0; p--) {
-                    if (dst && (sequences[c][p + 1] == sequences[c][p]) {
-                        in_dst[c][p](true);
+                    if (dst && (sequences[c][p + 1] == sequences[c][p])) {
+                        in_dst[c][p] = true;
                     } else {
-                        src = false;
+                        dst = false;
                     }
                 }
             }
@@ -138,8 +156,9 @@ namespace gossip {
                 all_buffers_.emplace_back(num_gpus);
                 for (gpu_id_t g = 0; g < num_gpus_; g++) {
                     all_buffers_[p].emplace_back(num_chunks, -1); // Chunk indexing starts at 0; -1 is no chunk
+                }
                 // Construct buffer state for each phase
-                for (chunk_id_t c = 0; c < num_chunks_; c++)
+                for (chunk_id_t c = 0; c < num_chunks_; c++) {
                     if (in_src[c][p]) {
                         all_buffers_[p][sequences[c][p]][positions[c][p]] = c;
                     } else if (in_dst[c][p]) {
@@ -147,6 +166,7 @@ namespace gossip {
                     } else {
                         all_buffers_[p][sequences[c][p] + num_gpus_][positions[c][p]] = c;
                     }
+                }
             }
             
             // Inititalize event array (temporary for each phase), Event indexing starts at 1; 0 means no event
@@ -154,6 +174,8 @@ namespace gossip {
             std::vector<event_id_t> events_after(num_chunks, 0); // events_after[i] is the event that is recorded after chunk i has been transferred
 
             for (size_t p = 0; p < num_phases_; p++) {
+                std::vector<transfer_template> tmp = {};
+                templates_.push_back(tmp);
                 // Iterate through buffers before the phase to construct all transfers
                 chunk_id_t s_idx, t_idx, num_added_chunks;
                 gpu_id_t sgpu, tgpu;
@@ -177,30 +199,30 @@ namespace gossip {
                             }
                             // Now create transfer template (possibly for multiple chunks)
                             // First determine if there is an event after and if there is an event before
-                            std::vector<event_id_t> evt_ids_before();
+                            event_id_t evt_id_after;
+                            std::vector<event_id_t> evt_ids_before(0);
                             if (!in_src[c_id][p])
                                 evt_ids_before.emplace_back(events_after[c_id]);
-                            event_id_t event_id_after;
                             if (!in_dst[c_id][p])
-                                event_id_after = next_evt_id++;
+                                evt_id_after = next_evt_id++;
                             else 
-                                event_id_after = 0
+                                evt_id_after = 0;
                             // Now collect chunks, collect the events before the transfer and update events_after 
-                            std::vector<chunk_id_t> chunks_together());
+                            std::vector<chunk_id_t> chunks_together(0);
                             chunks_together.emplace_back(c_id);
                             for (chunk_id_t i = 0; i < num_added_chunks; i++) {
-                                chunk_id_t nc_id = all_buffers_[p][sgpu][c_idx + i];
+                                chunk_id_t nc_id = all_buffers_[p][sgpu][c_id + i];
                                 chunks_together.emplace_back(nc_id);
                                 if (!in_src[nc_id][p]) {
                                     // If the previous chunk came with the same transfer as the current chunk (in the previous phase)
                                     // it has the same event_before and we do not need to wait for the same event twice.
-                                    if (evt_ids_before.back() != events_before[nc_id]))
-                                        evt_ids_before.emplace_back(events_before[nc_id]);
+                                    if (evt_ids_before.back() != events_after[nc_id])
+                                        evt_ids_before.emplace_back(events_after[nc_id]);
                                 }
                                 if (!in_dst[nc_id][p])
                                     events_after[nc_id] = evt_id_after;
                             }
-                            templates_.emplace_back(
+                            templates_[p].emplace_back(
                                 chunks_together,
                                 s_idx,
                                 t_idx,
@@ -208,13 +230,10 @@ namespace gossip {
                                 tgpu,
                                 evt_ids_before,
                                 evt_id_after
-                            )
+                            );
                         }
                     }
                 }
-                // Swap events: after -> before; 0 -> after
-                std::swap(events_after, events_before);
-                std::fill(events_after.begin(), events_after.end(), 0);
             }
             num_events_ = next_evt_id - 1;
             // Determine source and target GPUs
@@ -254,8 +273,8 @@ namespace gossip {
             return dst_gpus_;
         }
 
-        size_t num_steps() const noexcept {
-            return num_steps_;
+        size_t num_phases() const noexcept {
+            return num_phases_;
         }
 
         size_t num_chunks() const noexcept {
@@ -263,30 +282,33 @@ namespace gossip {
         }
 
         bool valid_mask(const gpu_id_t* mask) {
-            bool* tmp;
-            tmp = malloc(num_gpus);
-            for (gpu_id_t id = 0; id < num_gpus_; tid++)
-                tmp[tid] = 0;
+            gpu_id_t* tmp;
+            tmp = (gpu_id_t*) malloc(num_gpus_);
+            for (gpu_id_t id = 0; id < num_gpus_; id++)
+                tmp[id] = 0;
             for (gpu_id_t id = 0; id < num_gpus_; id++)
                 tmp[mask[id]]++;
             bool all_one = true;
             for (gpu_id_t tid = 0; tid < num_gpus_; tid++)
                 all_one = all_one && (tmp[tid] == 1);
-            return all_one
+            return all_one;
         }
         
         transfer_handler instantiate_handler(
+            const context_t* context,
             const std::vector<size_t>& chunk_sizes, 
-            const gpu_id_t* mask = nullptr
+            const gpu_id_t* mask = nullptr // TODO: Unused
         ) {
+            /*
             // If no mask is given: assume that the gpu ids in the plan are the actual gpu ids
             if (mask == nullptr) {
-                mask = malloc(sizeof(gpu_id_t) * num_gpus_);
+                mask = (gpu_id_t*) malloc(sizeof(gpu_id_t) * num_gpus_);
                 for (gpu_id_t i = 0; i < num_gpus_; i++)
                     mask[i] = i;
             } else {
                 check(valid_mask(mask), "instantiate_handler: mask must be a one-to-one mapping from the GPU IDs in the plan to the real GPU IDs");
             }
+            */
             // Create the event vector, actual events are created during the instantiate_transfer calls 
             std::vector<cudaEvent_t*> events(num_events_);
             // Calculate prefix sums over the buffers and at the same time determine the required buffer sizes
@@ -297,19 +319,19 @@ namespace gossip {
                 for (size_t g = 0; g < num_gpus_; g++) {
                     all_buf_offsets[g].emplace_back(num_chunks_);
                     size_t pref_sum = 0;
-                    for (chunk_id_t c = 0; c < num_chunks; c++) {
+                    for (chunk_id_t c = 0; c < num_chunks_; c++) {
                         all_buf_offsets[p][g][c] = pref_sum;
-                        if (all_buffers_[c] > -1)
-                            pref_sum += chunk_sizes[all_buffers_[c]];
+                        if (all_buffers_[p][g][c] > -1)
+                            pref_sum += chunk_sizes[all_buffers_[p][g][c]];
                     }
                     req_buf_sizes[g] = std::max(req_buf_sizes[g], pref_sum);
                 }
             }
             // Now create the actual transfers from the templates
-            std::vector<std::vector<transfer>> transfers(num_phases + 1);
+            std::vector<std::vector<transfer>> transfers(num_phases_ + 1);
             for (size_t p = 0; p < num_phases_; p++) {
-                for (t : templates_) {
-                    t.instantiate_transfer<size_t>(
+                for (auto t : templates_[p]) {
+                    t.instantiate_transfer(
                         chunk_sizes,
                         all_buf_offsets[p][t.src_gpu].data(),
                         all_buf_offsets[p][t.trg_gpu].data(),
@@ -318,7 +340,7 @@ namespace gossip {
                 }
             }
             // Now create transfer handler
-            return transfer_handler(num_phases_, num_chunks_, transfers, events, req_buf_sizes);
+            return transfer_handler(context, num_phases_, num_chunks_, transfers, events, req_buf_sizes);
         }
 
 

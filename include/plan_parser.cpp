@@ -5,9 +5,10 @@
 
 #include "plan_parser.hpp"
 #include "json.hpp"
-using json = nlohmann::json;
 
+using json = nlohmann::json;
 using gpu_id_t = gossip::gpu_id_t;
+using chunk_id_t = gossip::chunk_id_t;
 
 gossip::transfer_plan_t parse_plan(const char* filename) {
     std::string type = "";
@@ -22,13 +23,16 @@ gossip::transfer_plan_t parse_plan(const char* filename) {
     std::ifstream ifs(filename);
     json json_plan;
 
-    if(ifs.good())
+    // TODO: Find out what this was supposed to do??
+    /*
+    if(ifs.good()) {
         ifs >> json_plan;
-    else {
+    } else {
         std::cerr << "error reading " << filename << std::endl;
-        auto plan = gossip::transfer_plan_t{type, num_gpus,transfer_sequences};
+        auto plan = gossip::transfer_plan_t{type, num_gpus, num transfer_sequences};
         return plan;
     }
+    */
 
     // get plan from json
     auto it = json_plan.find("type");
@@ -65,14 +69,12 @@ gossip::transfer_plan_t parse_plan(const char* filename) {
         }
 
     it = json_plan.find("positions");
-    if(it != json_plan.end())
+    if (it != json_plan.end()) {
         for(const auto& seq : *it) {
-            transfer_sizes.push_back(seq);
+            positions.push_back(seq);
         }
+    }
 
     auto plan = gossip::transfer_plan_t{type, num_gpus, num_chunks, transfer_sequences, positions, transfer_sizes};
-
-    plan.main_gpu(main_gpu);
-
     return plan;
 }

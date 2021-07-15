@@ -1,6 +1,11 @@
 # pragma once
 
+
 #include <cstdint>
+#include <cuda_runtime_api.h>
+#include <cuda.h>
+// TODO: CUERR wont work
+// #include "../hpc_helpers/include/cuda_helpers.cuh"
 
 #define THROW_EXCEPTIONS 1
 

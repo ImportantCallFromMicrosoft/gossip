@@ -7,43 +7,42 @@
 
 namespace gossip {
     // shared between scatter, gather, all_to_all_async
->
+
     struct transfer {
         const gpu_id_t src_gpu;
         const size_t src_pos;
         const gpu_id_t trg_gpu;
         const size_t trg_pos;
         const size_t len;
-        const std::vector<cudaEvent_t*> events_before;
-        const cudaEvent_t* event_after;
+        cudaEvent_t** events_before;
+        const event_id_t num_events_before;
+        cudaEvent_t* event_after;
 
         transfer(const gpu_id_t src_gpu,
                  const size_t src_pos,
                  const gpu_id_t trg_gpu,
                  const size_t trg_pos,
                  const size_t len,
-                 const std::vector<cudaEvent_t*>& events_before,
-                 const cudaEvent_t* event_after = nullptr) :
+                 cudaEvent_t** events_before,
+                 const event_id_t num_events_before,
+                 cudaEvent_t* event_after = nullptr) :
             src_gpu(src_gpu),
             src_pos(src_pos),
             trg_gpu(trg_gpu),
             trg_pos(trg_pos),
             len(len),
-            event_before(event_before),
+            events_before(events_before),
+            num_events_before(num_events_before),
             event_after(event_after)
         {}
 
         void show() const {
-            std::string evts_before_str = "{";
-            for (ptr : events_before)
-                evts_before_str += to_string(e) + ",";
-            evts_before_str += "}"
             std::cout <<   "src:" << int(src_gpu)
                       << ", pos:" << src_pos
                       << ", trg:" << int(trg_gpu)
                       << ", pos:" << trg_pos
                       << ", len:" << len
-                      << ", events before:" << evts_before_str
+                      << ", num events before:" << num_events_before
                       << ", event after:" << (event_after ? event_after : 0)
                       << std::endl;
         }
@@ -58,12 +57,12 @@ namespace gossip {
         const std::vector<cudaEvent_t*> events_;
         const std::vector<size_t> buffer_sizes_;
 
-        transfer_handler<size_t>(
+        transfer_handler(
             const context_t * context,
             const size_t num_phases,
             const size_t num_chunks,
             const std::vector<std::vector<transfer>>& phases,
-            const std::vector<cudaEvent_t*> events; 
+            const std::vector<cudaEvent_t*>& events,
             const std::vector<size_t>& buffer_sizes
         ) :
             context_(context),
@@ -88,7 +87,7 @@ namespace gossip {
         }
 
         void show_phase(const size_t phase) const {
-            for(const transfer& t : phases[phase]) {
+            for(const transfer& t : phases_[phase]) {
                 t.show();
             }
         }
@@ -100,26 +99,25 @@ namespace gossip {
             const std::vector<value_t *>& dsts,
             const std::vector<value_t *>& bufs
         ) const {
-            for (const transfer& t : phases[phase]) {
-                const gpu_id_t src = context->get_device_id(t.src_gpu);
-                const gpu_id_t trg = context->get_device_id(t.trg_gpu);
-                const auto stream  = context->get_streams(t.src_gpu)[t.trg_gpu];
+            for (const transfer& t : phases_[phase]) {
+                const gpu_id_t src = context_->get_device_id(t.src_gpu);
+                const gpu_id_t trg = context_->get_device_id(t.trg_gpu);
+                const auto stream  = context_->get_streams(t.src_gpu)[t.trg_gpu];
                 cudaSetDevice(src);
                 const size_t size = t.len * sizeof(value_t);
-                value_t * from = (t.event_before == nullptr) ?
+                value_t * from = (t.num_events_before == 0) ?
                                 srcs[t.src_gpu] + t.src_pos :
                                 bufs[t.src_gpu] + t.src_pos;
                 value_t * to   = (t.event_after == nullptr) ?
                                 dsts[t.trg_gpu] + t.trg_pos :
                                 bufs[t.trg_gpu] + t.trg_pos;
 
-                for (eb : t.events_before)
-                    cudaStreamWaitEvent(stream, *(eb), 0);
+                for (event_id_t i = 0; i < t.num_events_before; i++)
+                    cudaStreamWaitEvent(stream, *t.events_before[i], 0);
                 cudaMemcpyPeerAsync(to, trg, from, src, size, stream);
                 if(t.event_after != nullptr) 
                     cudaEventRecord(*(t.event_after), stream);
-            } CUERR
-
+            } // TODO: CUERR
             return true;
         }
     };

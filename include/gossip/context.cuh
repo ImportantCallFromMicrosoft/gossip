@@ -58,7 +58,7 @@ private:
             for (gpu_id_t part = 0; part < num_gpus; ++part) {
                 cudaStreamCreate(&streams[src_gpu][part]);
             }
-        } CUERR
+        } // TODO: CUERR
 
         peer_status.resize(num_gpus, std::vector<PEER_STATUS>(num_gpus));
 
@@ -80,7 +80,7 @@ private:
                                                     PEER_STATUS::SLOW ;
                 }
             }
-        } CUERR
+        } // TODO: CUERR
 
         for (gpu_id_t src_gpu = 0; src_gpu < num_gpus; ++src_gpu) {
             const gpu_id_t src = get_device_id(src_gpu);
@@ -113,7 +113,7 @@ private:
                 }
 
             }
-        } CUERR
+        } // TODO: CUERR
     }
 
 public:
@@ -129,7 +129,7 @@ public:
                 cudaStreamSynchronize(get_streams(src_gpu)[part]);
                 cudaStreamDestroy(streams[src_gpu][part]);
             }
-        } CUERR
+        } // TODO: CUERR
 
         // disable peer access
         for (gpu_id_t src_gpu = 0; src_gpu < num_gpus; ++src_gpu) {
@@ -156,7 +156,7 @@ public:
                                    << __LINE__ << std::endl;
                 }
             }
-        } CUERR
+        } // TODO: CUERR
     }
 
     // return the number of devices belonging to context
