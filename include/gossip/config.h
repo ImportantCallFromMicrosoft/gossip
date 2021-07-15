@@ -7,6 +7,10 @@
 namespace gossip {
 
     using gpu_id_t = uint16_t;
+    using chunk_id_t = int;
+    using event_id_t = uint16_t;
+    // type for offsets in bytes or numbers of elements
+    using index_t = uint64_t;
     // type of multisplit counters
     using cnter_t = uint64_t;
 

@@ -16,6 +16,7 @@ gossip::transfer_plan_t parse_plan(const char* filename) {
     size_t num_steps = 0;
     size_t num_chunks = 0;
     std::vector<std::vector<gpu_id_t>> transfer_sequences = {};
+    std::vector<std::vector<chunk_id_t>> positions = {};
     std::vector<size_t> transfer_sizes = {};
 
     std::ifstream ifs(filename);
@@ -63,7 +64,13 @@ gossip::transfer_plan_t parse_plan(const char* filename) {
             transfer_sizes.push_back(seq);
         }
 
-    auto plan = gossip::transfer_plan_t{type, num_gpus, transfer_sequences, num_chunks, transfer_sizes};
+    it = json_plan.find("positions");
+    if(it != json_plan.end())
+        for(const auto& seq : *it) {
+            transfer_sizes.push_back(seq);
+        }
+
+    auto plan = gossip::transfer_plan_t{type, num_gpus, num_chunks, transfer_sequences, positions, transfer_sizes};
 
     plan.main_gpu(main_gpu);
 
