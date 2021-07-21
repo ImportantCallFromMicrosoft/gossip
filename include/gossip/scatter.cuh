@@ -1,12 +1,9 @@
 #pragma once
 
-#include <vector>
-
 #include "config.h"
 #include "error_checking.hpp"
-#include "common.cuh"
+#include "transfer_plan.hpp"
 #include "context.cuh"
-#include "scatter_plan.hpp"
 
 namespace gossip {
 
@@ -21,29 +18,34 @@ private:
 public:
     scatter_t (
         const context_t& context,
-        const transfer_plan_t& transfer_plan,
+        const transfer_plan_t& transfer_plan
     ) : 
         context_(&context),
         transfer_plan_(&transfer_plan),
-        curr_handler_(nullptr),
         handler_valid_(false)
     {
-        check(context->is_valid(), "You have to pass a valid context!");
+        std::string error_msg;
         // Minimalistic checks of the transfer plan
-        check(transfer_plan_->num_src_gpus() == 1, "scatter: transfer_plan must have exactly one source GPU");
-        check(transfer_plan_->num_dst_gpus() == transfer_plan_->num_gpus(), "scatter: transfer_plan must have as many destinations as gpus");
-        check(transfer_plan_->num_gpus() == context->get_num_devices(), "scatter: transfer_plan must fit number of gpus of context");
-        plan_valid_ = true;
+        check(context_->is_valid(), "You have to pass a valid context!");
+        error_msg = std::string("scatter: transfer_plan must have exactly one source GPU not ");
+        error_msg += std::to_string(transfer_plan_->num_src_gpus());
+
+        check(transfer_plan_->num_src_gpus() == 1, error_msg.data());
+        error_msg = std::string("scatter: transfer_plan must have as many destinations as GPUs not ");
+        error_msg += std::to_string(transfer_plan_->num_dst_gpus());
+        
+        check(transfer_plan_->num_dst_gpus() == transfer_plan_->num_gpus(), error_msg.data());
+        check(transfer_plan_->num_gpus() == context_->get_num_devices(), "scatter: transfer_plan must fit number of gpus of context");
     }
 
 public:
-    std::vector<size_t> calcBufferLengths(const std::vector<size_t>& chunk_sizes) {
+    const std::vector<size_t> calcBufferLengths(const std::vector<size_t>& chunk_sizes) {
         if (handler_valid_) {
-            return curr_handler_.buffer_sizes();
+            return curr_handler_->buffer_sizes();
         } else {
-            curr_handler_ = transfer_plan.instantiate_handler(chunk_sizes);
+            curr_handler_ = transfer_plan_->instantiate_handler(context_, chunk_sizes);
             handler_valid_ = true;
-            return curr_handler_.buffer_sizes_();
+            return curr_handler_->buffer_sizes();
         }
 
     };
@@ -73,52 +75,54 @@ public:
         const std::vector<index_t  >& bufs_lens,
         const std::vector<size_t  >& chunk_sizes,
         bool verbose = false
-    ) const {
+    ) {
+        std::cout << "scatter.cuh: execAsync" << std::endl; 
         if (!check(dsts.size() == get_num_devices(),
-                    "dsts size does not match number of gpus."))
-            return false;
+        "dsts size does not match number of gpus."))
+        return false;
         if (!check(dsts_lens.size() == get_num_devices(),
-                    "dsts_lens size does not match number of gpus."))
-            return false;
+        "dsts_lens size does not match number of gpus."))
+        return false;
         if (!check(bufs.size() == get_num_devices(),
-                    "bufs size does not match number of gpus."))
-            return false;
+        "bufs size does not match number of gpus."))
+        return false;
         if (!check(bufs_lens.size() == get_num_devices(),
-                    "bufs_lens size does not match number of gpus."))
-            return false;
-        if (!check(chunk_sizes.size() == transfer_plan.num_chunks(),
-                    "number of chunk sizes does not match number of gpus."))
-            return false;
-
+        "bufs_lens size does not match number of gpus."))
+        return false;
+        if (!check(chunk_sizes.size() == transfer_plan_->num_chunks(),
+        "number of chunk sizes does not match number of gpus."))
+        return false;
         
-        if (!plan_valid_) {
-            curr_handler_ = transfer_plan.instantiate_handler(chunk_sizes);
+        std::cout << "scatter.cuh: Instantiate Handler" << std::endl; 
+        if (!handler_valid_) {
+            curr_handler_ = transfer_plan_->instantiate_handler(context_, chunk_sizes);
             handler_valid_ = true;
-        }
-
+        } // TODO: Else check that the buffer sizes are correct for the given handler
+        
         std::vector<value_t *> srcs(get_num_devices(), nullptr);
-        srcs[transfer_plan.src()] = src;
-
-        for (size_t p = 0; p < transfers.num_phases; ++p)
-            transfers.execute_phase(p, srcs, dsts, bufs);
-
+        srcs[transfer_plan_->src_gpus()[0]] = src;
+        
+        std::cout << "scatter.cuh: Executing phases" << std::endl; 
+        for (size_t p = 0; p < curr_handler_->num_phases(); ++p)
+            curr_handler_->execute_phase(p, srcs, dsts, bufs);
+        
         return true;
     }
 
     gpu_id_t get_num_devices () const noexcept {
-        return context->get_num_devices();
+        return context_->get_num_devices();
     }
 
     void sync () const noexcept {
-        context->sync_all_streams();
+        context_->sync_all_streams();
     }
 
     void sync_hard () const noexcept {
-        context->sync_hard();
+        context_->sync_hard();
     }
 
     const context_t& get_context() const noexcept {
-        return *context;
+        return *context_;
     }
 };
 

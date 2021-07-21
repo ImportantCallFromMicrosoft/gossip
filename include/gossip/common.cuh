@@ -73,6 +73,7 @@ namespace gossip {
             buffer_sizes_(buffer_sizes_)
 
         {}
+        
 
         transfer_handler(const transfer_handler&) = delete;
         transfer_handler(transfer_handler&&) = default;
@@ -82,8 +83,12 @@ namespace gossip {
                 cudaEventDestroy(*e);
         }
 
-        const std::vector<size_t> buffer_size() {
+        const std::vector<size_t> buffer_sizes() const {
             return buffer_sizes_;
+        }
+
+        size_t num_phases() const {
+            return num_phases_;
         }
 
         void show_phase(const size_t phase) const {

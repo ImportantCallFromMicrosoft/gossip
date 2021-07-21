@@ -24,15 +24,12 @@ gossip::transfer_plan_t parse_plan(const char* filename) {
     json json_plan;
 
     // TODO: Find out what this was supposed to do??
-    /*
     if(ifs.good()) {
         ifs >> json_plan;
     } else {
-        std::cerr << "error reading " << filename << std::endl;
-        auto plan = gossip::transfer_plan_t{type, num_gpus, num transfer_sequences};
-        return plan;
+        throw std::invalid_argument("Error reading " + std::string(filename));
+        
     }
-    */
 
     // get plan from json
     auto it = json_plan.find("type");
@@ -62,12 +59,6 @@ gossip::transfer_plan_t parse_plan(const char* filename) {
             //TODO cut surplus items from seq
         }
 
-    it = json_plan.find("chunks");
-    if(it != json_plan.end())
-        for(const auto& seq : *it) {
-            transfer_sizes.push_back(seq);
-        }
-
     it = json_plan.find("positions");
     if (it != json_plan.end()) {
         for(const auto& seq : *it) {
@@ -75,6 +66,14 @@ gossip::transfer_plan_t parse_plan(const char* filename) {
         }
     }
 
-    auto plan = gossip::transfer_plan_t{type, num_gpus, num_chunks, transfer_sequences, positions, transfer_sizes};
+    it = json_plan.find("chunks");
+    if(it != json_plan.end())
+        for(const auto& seq : *it) {
+            transfer_sizes.push_back(seq);
+        }
+
+    std::cout << "plan_parser.cpp: Jetzt wird der Plan schön erstellt wallah" << std::endl;
+    auto plan = gossip::transfer_plan_t{type, num_gpus, transfer_sequences, positions, transfer_sizes};
+    std::cout << "plan_parser.cpp: Jetzt wird der Plan schön zurückgeschickt maschallah" << std::endl;
     return plan;
 }

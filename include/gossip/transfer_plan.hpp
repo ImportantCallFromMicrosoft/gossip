@@ -1,8 +1,5 @@
 #pragma once
 
-#include <vector>
-#include <iostream>
-
 #include "config.h"
 #include "common.cuh"
 #include "error_checking.hpp"
@@ -65,7 +62,7 @@ namespace gossip {
                 for (event_id_t i : evt_ids_before)
                     evts_before[i] = events[i-1];
                 cudaEvent_t* evt_after;
-                if (evt_id_after == 0)
+                if (!evt_id_after)
                     evt_after = nullptr;
                 else
                     evt_after = events[evt_id_after - 1];
@@ -84,8 +81,8 @@ namespace gossip {
 
     class transfer_plan_t {
     private:
-        std::string type_;
-        gpu_id_t num_gpus_;
+        const std::string type_;
+        const gpu_id_t num_gpus_;
         const size_t num_chunks_;
         const size_t num_phases_;
         size_t num_events_;
@@ -98,25 +95,31 @@ namespace gossip {
         transfer_plan_t(
             const std::string type,
             const gpu_id_t num_gpus,
-            const size_t num_chunks,
             const std::vector<std::vector<gpu_id_t>>& sequences,
             const std::vector<std::vector<chunk_id_t>>& positions,
             const std::vector<size_t>& transfer_sizes
         ) :
             type_(type),
             num_gpus_(num_gpus),
-            num_phases_(sequences[0].size()),
-            num_chunks_(num_chunks)
-        {
+            num_chunks_(sequences.size()),
+            num_phases_(sequences[0].size() - 1)
+        {  
+            std::cout << "type " << type << std::endl;
+            std::cout << "num_gpus " << num_gpus_ << std::endl;
+            std::cout << "num_chunks " << num_chunks_ << std::endl;
+            std::cout << "sequences " << sequences.size() << std::endl;
+            std::cout << "positions " << positions.size() << std::endl;
+            std::cout << "sizes " << transfer_sizes.size() << std::endl;
             check(sequences.size() == num_chunks_, "transfer_plan: there must be exactly one sequence for each chunk");
-            check(positions.size() == num_chunks_, "transfer_plan: there must be exactly one position for each chunk for each phase");
-            check(transfer_sizes.size() != num_chunks_, "transfer_plan: there must be exactly one transfer size for each chunk");
+            check(positions.size() == num_chunks_, "transfer_plan: there must be exactly one array of positions for each chunk");
+            check(transfer_sizes.size() == num_chunks_, "transfer_plan: there must be exactly one transfer size for each chunk");
             check(num_phases_ > 1, "transfer_plan: a transfer plan needs at least one phase");
             for (chunk_id_t c = 0; c < num_chunks_; c++) {
                 check(sequences[c].size() == num_phases_ + 1, "transfer_plan: sequences must have dimension num_chunks * (num_phases + 1)");
                 check(positions[c].size() == num_phases_ + 1, "transfer_plan: positions must have dimension num_chunks * (num_phases + 1)");
             }
 
+            std::cout << "transfer_plan.hpp: Erstmal werden in_src und in_dst vollgeschallert" << std::endl;
             // Find out which chunks reside in the source and destination arrays at which time
             // in_src[c][p] (in_dst) returns whether the chunk c is in the source (destination) array after phase p 
             std::vector<std::vector<bool>> in_src(num_chunks_);
@@ -135,35 +138,41 @@ namespace gossip {
 
             std::vector<std::vector<bool>> in_dst(0);
             for (chunk_id_t c = 0; c < num_chunks_; c++) {
-                in_dst.emplace_back(num_phases_, false);
+                in_dst.emplace_back(num_phases_ + 1, false);
                 in_dst[c][num_phases_] = true;
                 bool dst = true;
-                for (size_t p = num_phases_ - 1; p >= 0; p--) {
-                    if (dst && (sequences[c][p + 1] == sequences[c][p])) {
-                        in_dst[c][p] = true;
+                for (size_t p = num_phases_; p > 0; p--) {
+                    if (dst && (sequences[c][p] == sequences[c][p - 1])) {
+                        in_dst[c][p - 1] = true;
                     } else {
                         dst = false;
                     }
                 }
             }
 
+            std::cout << "transfer_plan.hpp: Yo ihr Pimmelberger, wir machen jetzt den all_buffers_ voll" << std::endl;
+            std::cout << "transfer_plan.hpp: Phases " << num_phases_ << " GPUs " << num_gpus_ << std::endl;
+
             // all_buffers_ will hold all contents of all buffers, source and destination arrays for every phase
             // all_buffers_[p][g][i] is the id of the chunk at position i in the source array of gpu g before phase p
             // all_buffers_[p][g + num_gpus_][i] is the id of the chunk at position i in the buffer of gpu g before phase p 
             // all_buffers_[p][g + 2 * num_gpus_][i] is the id of the chunk at position i in the destination array of gpu g before phase p
             // (last p is state after the last phase)
-            for (size_t p = 0; p < num_phases_ + 1; p++) {
-                all_buffers_.emplace_back(num_gpus);
-                for (gpu_id_t g = 0; g < num_gpus_; g++) {
-                    all_buffers_[p].emplace_back(num_chunks, -1); // Chunk indexing starts at 0; -1 is no chunk
-                }
+            for (size_t p = 0; p <= num_phases_; p++) {
+                std::cout << "transfer_plan.hpp: all_buffers vollmachen p = " << p << std::endl;
+                all_buffers_.emplace_back(3 * num_gpus_, std::vector<chunk_id_t>(num_chunks_, -1));
+                std::cout << "transfer_plan.hpp: all_buffers vollmachen p = " << p << " part 2 " << std::endl;
+                std::cout << "transfer_plan.hpp: all_buffers DIM: " << all_buffers_.size() << " - " << all_buffers_[0].size()  << " - " << all_buffers_[0][0].size() << std::endl;
                 // Construct buffer state for each phase
                 for (chunk_id_t c = 0; c < num_chunks_; c++) {
                     if (in_src[c][p]) {
+                        std::cout << "insrc " << c << " " << sequences[c][p] << " " << positions[c][p] << std::endl;
                         all_buffers_[p][sequences[c][p]][positions[c][p]] = c;
                     } else if (in_dst[c][p]) {
+                        std::cout << "indst " << c << " " << sequences[c][p] << " " << positions[c][p] << std::endl;
                         all_buffers_[p][sequences[c][p] + 2 * num_gpus_][positions[c][p]] = c;
                     } else {
+                        std::cout << "inbuf " << c << " " << sequences[c][p] << " " << positions[c][p] << std::endl;
                         all_buffers_[p][sequences[c][p] + num_gpus_][positions[c][p]] = c;
                     }
                 }
@@ -171,15 +180,18 @@ namespace gossip {
             
             // Inititalize event array (temporary for each phase), Event indexing starts at 1; 0 means no event
             event_id_t next_evt_id = 1;
-            std::vector<event_id_t> events_after(num_chunks, 0); // events_after[i] is the event that is recorded after chunk i has been transferred
+            std::vector<event_id_t> events_after(num_chunks_, 0); // events_after[i] is the event that is recorded after chunk i has been transferred
 
+            std::cout << "transfer_plan.hpp: Und REIN in die große Schleife ihr Lutscher" << std::endl;
             for (size_t p = 0; p < num_phases_; p++) {
+                std::cout << "transfer_plan.hpp: Große Schleife Phase " << p << std::endl;
                 std::vector<transfer_template> tmp = {};
                 templates_.push_back(tmp);
                 // Iterate through buffers before the phase to construct all transfers
-                chunk_id_t s_idx, t_idx, num_added_chunks;
+                chunk_id_t s_idx, t_idx, num_together;
                 gpu_id_t sgpu, tgpu;
                 for (sgpu = 0; sgpu < num_gpus_ * 3; sgpu++) {
+                    std::cout << "transfer_plan.hpp: Große Schleife Phase " << p << " GPU " << sgpu << std::endl;
                     if (!all_buffers_[p][sgpu].empty()) {
                         s_idx = 0;
                         // Each iteration creates on transfer, loops until all chunks in the buffer have a transfer (0 as chunk_id means no chunk)
@@ -189,13 +201,13 @@ namespace gossip {
                             tgpu = sequences[c_id][p];
                             t_idx = positions[c_id][p];
                             // Find out how many of the chunks that lie directly after the current chunk have the same target and adjacent position
-                            num_added_chunks = 1;
+                            num_together = 1;
                             while (
-                                s_idx + num_added_chunks < all_buffers_[p][sgpu].size() && 
-                                0 <= all_buffers_[p][sgpu][s_idx + num_added_chunks] &&
-                                all_buffers_[p][sgpu][s_idx + num_added_chunks] == all_buffers_[p+1][tgpu][t_idx + num_added_chunks]
+                                s_idx + num_together < all_buffers_[p][sgpu].size() && 
+                                0 <= all_buffers_[p][sgpu][s_idx + num_together] &&
+                                all_buffers_[p][sgpu][s_idx + num_together] == all_buffers_[p+1][tgpu][t_idx + num_together]
                             ) {
-                                num_added_chunks++;
+                                num_together++;
                             }
                             // Now create transfer template (possibly for multiple chunks)
                             // First determine if there is an event after and if there is an event before
@@ -210,7 +222,7 @@ namespace gossip {
                             // Now collect chunks, collect the events before the transfer and update events_after 
                             std::vector<chunk_id_t> chunks_together(0);
                             chunks_together.emplace_back(c_id);
-                            for (chunk_id_t i = 0; i < num_added_chunks; i++) {
+                            for (chunk_id_t i = 0; i < num_together; i++) {
                                 chunk_id_t nc_id = all_buffers_[p][sgpu][c_id + i];
                                 chunks_together.emplace_back(nc_id);
                                 if (!in_src[nc_id][p]) {
@@ -231,19 +243,29 @@ namespace gossip {
                                 evt_ids_before,
                                 evt_id_after
                             );
+                            s_idx += num_together;
                         }
                     }
                 }
             }
             num_events_ = next_evt_id - 1;
             // Determine source and target GPUs
+            auto get_num_chunks = [&](std::vector<chunk_id_t> vec) -> chunk_id_t {
+                chunk_id_t count = 0;
+                for (chunk_id_t el : vec)
+                    if (el >= 0)
+                        count++;
+                return count;
+            };
             for (gpu_id_t g = 0; g < num_gpus_; g++) {
-                // Nonempty before first phase => source 
-                if (all_buffers_[0][g].size() > 0) {
+                // Nonempty src before first phase -> source
+                if (get_num_chunks(all_buffers_[0][g]) > 0) {
                     src_gpus_.emplace_back(g);
                 }
-                // Nonempty after last phase => destination 
-                if (all_buffers_[num_phases_][g].size() > 0) {
+                // Nonempty dst after last phase -> destination
+                // NOTE: If chunk stays in the src buffer all the time (i.e. is already on the right GPU in the beginning) 
+                // that GPU is also a destination. See second condition
+                if (get_num_chunks(all_buffers_[num_phases_][g + 2 * num_gpus_]) > 0 || get_num_chunks(all_buffers_[num_phases_][g]) > 0) {
                     dst_gpus_.emplace_back(g);
                 }
             }
@@ -294,11 +316,11 @@ namespace gossip {
             return all_one;
         }
         
-        transfer_handler instantiate_handler(
+        transfer_handler* instantiate_handler(
             const context_t* context,
             const std::vector<size_t>& chunk_sizes, 
             const gpu_id_t* mask = nullptr // TODO: Unused
-        ) {
+        ) const {
             /*
             // If no mask is given: assume that the gpu ids in the plan are the actual gpu ids
             if (mask == nullptr) {
@@ -311,36 +333,43 @@ namespace gossip {
             */
             // Create the event vector, actual events are created during the instantiate_transfer calls 
             std::vector<cudaEvent_t*> events(num_events_);
+            std::cout << "transfer_plan.hpp: Prefix sums" << std::endl; 
             // Calculate prefix sums over the buffers and at the same time determine the required buffer sizes
             std::vector<size_t> req_buf_sizes(num_gpus_);
-            std::vector<std::vector<std::vector<size_t>>> all_buf_offsets(num_phases_);
-            for (size_t p = 0; p < num_phases_; p++) {
-                all_buf_offsets[p].emplace_back(num_gpus_);
-                for (size_t g = 0; g < num_gpus_; g++) {
-                    all_buf_offsets[g].emplace_back(num_chunks_);
+            std::vector<std::vector<std::vector<size_t>>> all_buf_offsets(num_phases_ + 1);
+            for (size_t p = 0; p <= num_phases_; p++) {
+                std::cout << "transfer_plan.hpp: Phase " << p << std::endl; 
+                all_buf_offsets[p].emplace_back(num_gpus_ * 3, std::vector<size_t> (num_chunks_, 0));
+                std::cout << "transfer_plan.hpp: all_buf_offsets[p] has size " << all_buf_offsets[p].size() << std::endl;
+                for (size_t g = 0; g < num_gpus_ * 3; g++) {
+                    std::cout << "transfer_plan.hpp: Phase " << p << " GPU " << g << std::endl;
                     size_t pref_sum = 0;
+                    std::cout << "transfer_plan.hpp: all_buf_offsets[p][g] has size " << all_buf_offsets[p][g].size() << std::endl;
                     for (chunk_id_t c = 0; c < num_chunks_; c++) {
                         all_buf_offsets[p][g][c] = pref_sum;
                         if (all_buffers_[p][g][c] > -1)
                             pref_sum += chunk_sizes[all_buffers_[p][g][c]];
                     }
-                    req_buf_sizes[g] = std::max(req_buf_sizes[g], pref_sum);
+                    // If g is not source or destination we check whether the buffer of g has to hold more data than before
+                    if (num_gpus_ <= g && g < 2 * num_gpus_)
+                        req_buf_sizes[g] = std::max(req_buf_sizes[g], pref_sum);
                 }
             }
             // Now create the actual transfers from the templates
+            std::cout << "transfer_plan.hpp: Turning templates into transfers" << std::endl; 
             std::vector<std::vector<transfer>> transfers(num_phases_ + 1);
             for (size_t p = 0; p < num_phases_; p++) {
                 for (auto t : templates_[p]) {
                     t.instantiate_transfer(
                         chunk_sizes,
                         all_buf_offsets[p][t.src_gpu].data(),
-                        all_buf_offsets[p][t.trg_gpu].data(),
+                        all_buf_offsets[p+1][t.trg_gpu].data(),
                         events
                     );
                 }
             }
             // Now create transfer handler
-            return transfer_handler(context, num_phases_, num_chunks_, transfers, events, req_buf_sizes);
+            return new transfer_handler(context, num_phases_, num_chunks_, transfers, events, req_buf_sizes);
         }
 
 

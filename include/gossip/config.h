@@ -2,6 +2,10 @@
 
 
 #include <cstdint>
+#include <iostream>
+#include <string>
+#include <vector>
+#include <algorithm>
 #include <cuda_runtime_api.h>
 #include <cuda.h>
 // TODO: CUERR wont work
